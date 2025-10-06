@@ -1,0 +1,325 @@
+import pygame
+import random
+import sys
+import math
+
+# Inicialización
+pygame.init()
+
+# Configuración
+GRID_SIZE = 10
+TILE_SIZE = 60
+WIDTH = HEIGHT = GRID_SIZE * TILE_SIZE
+FPS = 60
+
+
+# Colores
+GREEN = (34, 139, 34)
+WHITE = (255, 255, 255)
+RED = (220, 20, 60)
+GOLD = (255, 215, 0)
+BLACK = (0, 0, 0)
+GRAY = (105, 105, 105)
+DARK_GRAY = (70, 70, 70)
+BAT_COLOR = (160, 82, 45)  # Color del bate (madera)
+
+# Ventana
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("🐰 Conejito Recolector Animado con Bate")
+font = pygame.font.SysFont(None, 36)
+large_font = pygame.font.SysFont(None, 72)
+clock = pygame.time.Clock()
+
+# Función para iniciar o reiniciar juego
+def iniciar_juego():
+    return {
+        "player_pos": [GRID_SIZE // 2, GRID_SIZE // 2],
+        "player_pixel_pos": [GRID_SIZE // 2 * TILE_SIZE, GRID_SIZE // 2 * TILE_SIZE],
+        "moving": False,
+        "target_pixel_pos": None,
+        "direction": None,
+        "score": 1,
+        "apples": [],
+        "spikes": [],
+        "game_over": False,
+        "spike_move_timer": 0,
+        "spike_move_delay": 100,  # Mucho más lento (antes 20)
+        "animation_timer": 0,  # para animaciones pulsantes
+        "bat_active": False,
+        "bat_timer": 0,
+        "bat_duration": 10  # frames que dura visible el bate (~0.16 seg)
+    }
+
+estado = iniciar_juego()
+
+# === FUNCIONES DE DIBUJO ===
+def draw_grid():
+    for y in range(GRID_SIZE):
+        for x in range(GRID_SIZE):
+            rect = pygame.Rect(x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE)
+            pygame.draw.rect(screen, GREEN, rect)
+            pygame.draw.rect(screen, BLACK, rect, 1)
+
+def draw_player(pixel_pos, anim_timer):
+    # Animación: círculo que cambia tamaño con un pulso sinusoidal
+    center = (int(pixel_pos[0] + TILE_SIZE//2), int(pixel_pos[1] + TILE_SIZE//2))
+    base_radius = TILE_SIZE // 3
+    pulse = (math.sin(anim_timer * 0.1) + 1) / 2  # 0 a 1
+    radius = base_radius - 5 + 10 * pulse
+    pygame.draw.circle(screen, WHITE, center, int(radius))
+    # Orejas (triángulos)
+    ear_height = int(15 + 5 * pulse)
+    ear_width = 10
+    left_ear = [
+        (center[0] - 15, center[1] - 15),
+        (center[0] - 15 - ear_width, center[1] - 15 - ear_height),
+        (center[0] - 15 + ear_width, center[1] - 15 - ear_height)
+    ]
+    right_ear = [
+        (center[0] + 15, center[1] - 15),
+        (center[0] + 15 - ear_width, center[1] - 15 - ear_height),
+        (center[0] + 15 + ear_width, center[1] - 15 - ear_height)
+    ]
+    pygame.draw.polygon(screen, WHITE, left_ear)
+    pygame.draw.polygon(screen, WHITE, right_ear)
+
+def draw_bat(pixel_pos, direction):
+    # Dibuja el bate al lado del conejito según la dirección
+    center_x = int(pixel_pos[0] + TILE_SIZE//2)
+    center_y = int(pixel_pos[1] + TILE_SIZE//2)
+    bat_width = 8
+    bat_length = 30
+
+    # Dirección: si None, dibujamos a la derecha por defecto
+    if direction is None:
+        direction = (1, 0)
+
+    dx, dy = direction
+
+    if dx == 1:  # derecha
+        bat_rect = pygame.Rect(center_x + 20, center_y - bat_width//2, bat_length, bat_width)
+    elif dx == -1:  # izquierda
+        bat_rect = pygame.Rect(center_x - 20 - bat_length, center_y - bat_width//2, bat_length, bat_width)
+    elif dy == 1:  # abajo
+        bat_rect = pygame.Rect(center_x - bat_width//2, center_y + 20, bat_width, bat_length)
+    elif dy == -1:  # arriba
+        bat_rect = pygame.Rect(center_x - bat_width//2, center_y - 20 - bat_length, bat_width, bat_length)
+    else:
+        bat_rect = pygame.Rect(center_x + 20, center_y - bat_width//2, bat_length, bat_width)
+
+    pygame.draw.rect(screen, BAT_COLOR, bat_rect)
+
+def draw_apples(apples, anim_timer):
+    for x, y, tipo in apples:
+        base_radius = TILE_SIZE // 4
+        pulse = (math.sin(anim_timer * 0.15 + (x + y)) + 1) / 2
+        radius = base_radius - 3 + 6 * pulse
+        center = (x*TILE_SIZE + TILE_SIZE//2, y*TILE_SIZE + TILE_SIZE//2)
+        color = RED if tipo == "roja" else GOLD
+        pygame.draw.circle(screen, color, center, int(radius))
+        # Detalle manzana: pequeño tallo
+        pygame.draw.rect(screen, (139,69,19), (center[0]-2, center[1]-radius-6, 4, 6))
+
+def draw_spikes(spikes, anim_timer):
+    for x, y in spikes:
+        center = (x*TILE_SIZE + TILE_SIZE//2, y*TILE_SIZE + TILE_SIZE//2)
+        pulse = (math.sin(anim_timer * 0.2 + (x + y)) + 1) / 2
+        color = tuple(int(GRAY[i]*pulse + DARK_GRAY[i]*(1-pulse)) for i in range(3))
+        pygame.draw.polygon(screen, color, [
+            (center[0], center[1] - 15),
+            (center[0] - 10, center[1] + 10),
+            (center[0] + 10, center[1] + 10)
+        ])
+
+def draw_score(score):
+    text = font.render(f"Puntaje: {score}", True, BLACK)
+    screen.blit(text, (10, 10))
+
+def mostrar_mensaje_derrota():
+    texto = large_font.render("¡Has perdido!", True, RED)
+    texto2 = font.render("Presiona R para reiniciar", True, WHITE)
+    screen.blit(texto, (WIDTH//2 - texto.get_width()//2, HEIGHT//2 - 50))
+    screen.blit(texto2, (WIDTH//2 - texto2.get_width()//2, HEIGHT//2 + 20))
+
+# === FUNCIONES DE LÓGICA ===
+def get_occupied_positions():
+    positions = {tuple(estado["player_pos"])}
+    for x, y, _ in estado["apples"]:
+        positions.add((x, y))
+    for x, y in estado["spikes"]:
+        positions.add((x, y))
+    return positions
+
+def spawn_items():
+    occupied = get_occupied_positions()
+    # Manzanas
+    if random.random() < 0.3:
+        empty = [(x, y) for x in range(GRID_SIZE) for y in range(GRID_SIZE) if (x, y) not in occupied]
+        if empty:
+            x, y = random.choice(empty)
+            tipo = random.choice(["roja", "dorada"])
+            estado["apples"].append((x, y, tipo))
+            occupied.add((x, y))
+    # Pinchos, máximo 4
+    if len(estado["spikes"]) < 4 and random.random() < 0.5:
+        empty = [(x, y) for x in range(GRID_SIZE) for y in range(GRID_SIZE) if (x, y) not in occupied]
+        if empty:
+            x, y = random.choice(empty)
+            estado["spikes"].append((x, y))
+
+def handle_collisions():
+    px, py = estado["player_pos"]
+    # Manzanas
+    nuevas_apples = []
+    for x, y, tipo in estado["apples"]:
+        if (x, y) == (px, py):
+            estado["score"] += 2 if tipo == "roja" else 3
+        else:
+            nuevas_apples.append((x, y, tipo))
+    estado["apples"] = nuevas_apples
+
+    # Pinchos
+    nuevas_spikes = []
+    for x, y in estado["spikes"]:
+        if (x, y) == (px, py):
+            estado["score"] -= 1
+        else:
+            nuevas_spikes.append((x, y))
+    estado["spikes"] = nuevas_spikes
+
+def move_spikes():
+    jugador = tuple(estado["player_pos"])
+    nuevas_spikes = []
+    occupied = get_occupied_positions()
+
+    for x, y in estado["spikes"]:
+        dx = 0 if x == jugador[0] else (1 if jugador[0] > x else -1)
+        dy = 0 if y == jugador[1] else (1 if jugador[1] > y else -1)
+
+        movimientos = [(x + dx, y), (x, y + dy), (x + dx, y + dy)]
+        random.shuffle(movimientos)
+
+        moved = False
+        for nx, ny in movimientos:
+            if 0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE:
+                if (nx, ny) == jugador:
+                    estado["score"] -= 1
+                    nuevas_spikes.append((nx, ny))
+                    moved = True
+                    break
+                elif (nx, ny) not in occupied:
+                    nuevas_spikes.append((nx, ny))
+                    moved = True
+                    break
+
+        if not moved:
+            nuevas_spikes.append((x, y))
+
+    estado["spikes"] = nuevas_spikes
+
+def start_move(direction):
+    if estado["moving"] or estado["game_over"]:
+        return
+    dx, dy = direction
+    x, y = estado["player_pos"]
+    nx, ny = x + dx, y + dy
+    if 0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE:
+        estado["player_pos"] = [nx, ny]
+        estado["target_pixel_pos"] = [nx * TILE_SIZE, ny * TILE_SIZE]
+        estado["direction"] = direction
+        estado["moving"] = True
+
+def batear():
+    if estado["bat_active"] or estado["game_over"]:
+        return
+    # Activar bate por unos frames
+    estado["bat_active"] = True
+    estado["bat_timer"] = 0
+
+    # Posición jugador
+    px, py = estado["player_pos"]
+    dx, dy = estado["direction"] if estado["direction"] else (1, 0)  # si no se mueve, batea a la derecha
+
+    # Posición golpeada por bate
+    golpe_pos = (px + dx, py + dy)
+
+    # Eliminar pincho si está en la casilla golpeada
+    if golpe_pos in estado["spikes"]:
+        estado["spikes"].remove(golpe_pos)
+
+# === LOOP PRINCIPAL ===
+while True:
+    dt = clock.tick(FPS)
+    screen.fill(BLACK)
+
+    estado["animation_timer"] += 1
+    estado["spike_move_timer"] += 1
+
+    draw_grid()
+    draw_apples(estado["apples"], estado["animation_timer"])
+    draw_spikes(estado["spikes"], estado["animation_timer"])
+    draw_score(estado["score"])
+
+    # Movimiento suave jugador
+    if estado["moving"]:
+        speed = 8
+        for i in (0, 1):
+            if estado["player_pixel_pos"][i] < estado["target_pixel_pos"][i]:
+                estado["player_pixel_pos"][i] = min(estado["player_pixel_pos"][i] + speed, estado["target_pixel_pos"][i])
+            elif estado["player_pixel_pos"][i] > estado["target_pixel_pos"][i]:
+                estado["player_pixel_pos"][i] = max(estado["player_pixel_pos"][i] - speed, estado["target_pixel_pos"][i])
+
+        if estado["player_pixel_pos"] == estado["target_pixel_pos"]:
+            estado["moving"] = False
+            estado["direction"] = None
+            handle_collisions()
+            spawn_items()
+
+    # Dibujar bate si activo
+    if estado["bat_active"]:
+        draw_bat(estado["player_pixel_pos"], estado["direction"])
+        estado["bat_timer"] += 1
+        if estado["bat_timer"] >= estado["bat_duration"]:
+            estado["bat_active"] = False
+            estado["bat_timer"] = 0
+
+    draw_player(estado["player_pixel_pos"], estado["animation_timer"])
+
+    # Pinchos se mueven cada spike_move_delay frames, incluso si jugador está quieto
+    if estado["spike_move_timer"] >= estado["spike_move_delay"]:
+        move_spikes()
+        estado["spike_move_timer"] = 0
+
+    # Verificar derrota
+    if estado["score"] <= 0:
+        estado["game_over"] = True
+
+    if estado["game_over"]:
+        mostrar_mensaje_derrota()
+
+    pygame.display.flip()
+
+    # Eventos
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
+
+        if estado["game_over"] and event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+            estado = iniciar_juego()
+
+        # Detectar click izquierdo para batear
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            batear()
+
+    # Movimiento por teclas (WASD)
+    keys = pygame.key.get_pressed()
+    if not estado["moving"] and not estado["game_over"]:
+        if keys[pygame.K_a]:      # A para izquierda
+            start_move((-1, 0))
+        elif keys[pygame.K_d]:    # D para derecha
+            start_move((1, 0))
+        elif keys[pygame.K_w]:    # W para arriba
+            start_move((0, -1))
+        elif keys[pygame.K_s]:    # S para abajo
+            start_move((0, 1))
